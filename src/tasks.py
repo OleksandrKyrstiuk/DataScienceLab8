@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from typing import Tuple, Optional, Dict, Any
 from tensorflow.keras.preprocessing.image import DirectoryIterator
 
+
 class IntervalLogger(tf.keras.callbacks.ProgbarLogger):
     """
     Custom callback for logging training progress at specified intervals.
@@ -44,8 +45,8 @@ def train_dataset(batch_size: int = 64) -> Tuple[DirectoryIterator, DirectoryIte
     Returns:
         tuple: (train_generator, validation_generator, test_generator)
     """
-    dir_train = './PetImages/train'
-    dir_test = './PetImages/val'
+    dir_train = '../PetImages/train'
+    dir_test = '../PetImages/val'
 
     # Data augmentation configuration for training data
     train_datagen = ImageDataGenerator(
@@ -93,7 +94,7 @@ def CNN() -> Sequential:
     Create and return a CNN model for pet image classification.
     
     Returns:
-        Sequential: A compiled CNN model with the following architecture:
+        Sequential: A CNN model with the following architecture:
         - Three convolutional blocks with increasing filters
         - Batch normalization and max pooling after each block
         - Dense layers with dropout for classification
@@ -101,67 +102,113 @@ def CNN() -> Sequential:
     model = Sequential()
 
     # Input Layer
+    model.add(Input(shape=(180, 180, 3)))
     
     # First Convolutional Block with 128 filters
-
-    # Batch normalization
-
-    # Max pooling
-
+    model.add(Conv2D(128, kernel_size=(3, 3), strides=(2, 2), padding="same", activation="relu"))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=(2, 2)))
     
     # Second Convolutional Block with 256 filters
-
-    # Batch normalization
-
-    # Max pooling
-
+    model.add(Conv2D(256, kernel_size=(3, 3), strides=(2, 2), padding="same", activation="relu"))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=(2, 2)))
     
     # Third Convolutional Block with 512 filters
-
-    # Batch normalization
-
-    # Max pooling
-
+    model.add(Conv2D(512, kernel_size=(3, 3), strides=(2, 2), padding="same", activation="relu"))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=(2, 2)))
     
     # Flatten and Dense Layers
-
-    # Dense layer with 1024 units and ReLU activation
-
-    # Dropout layer with rate 0.3
-
-    # Output Dense layer with 2 units and softmax activation. 2 classes: Cat and Dog
+    model.add(Flatten())
+    model.add(Dense(1024, activation="relu"))
+    model.add(Dropout(0.3))
+    model.add(Dense(2, activation="softmax"))
     
     return model
 
 
-def train(batch_size: int = 32, epochs: int = 10) -> Tuple[Sequential, DirectoryIterator]:
-    """
-    Train the CNN model on the pet images dataset.
-    
-    Args:
-        batch_size (int): Number of samples per batch
-        epochs (int): Number of training epochs
-        
-    Returns:
-        tuple: (trained_model, test_data)
-    """
-    # Load the data
-    train_data, val_data, test_data = ...
-    
-    # Create and compile the model
-    model = ...
+def train_dataset(batch_size: int = 32) -> Tuple[DirectoryIterator, DirectoryIterator, DirectoryIterator]:
+    dir_train = '../PetImages/train'
+    dir_test = '../PetImages/val'
 
-    # Print model summary
-    print(...)
+    # Пом'якшена аугментація (прибрано vertical_flip, зменшено повороти та зум)
+    train_datagen = ImageDataGenerator(
+        rescale=1./255,
+        zoom_range=0.15,
+        rotation_range=20,
+        width_shift_range=0.1,
+        height_shift_range=0.1,
+        horizontal_flip=True,
+        validation_split=0.1,
+    )
+    test_datagen = ImageDataGenerator(rescale=1./255)
+
+    train = train_datagen.flow_from_directory(
+        dir_train,
+        target_size=(180, 180),
+        batch_size=batch_size,
+        subset="training",
+        class_mode='categorical'
+    )
+    val = train_datagen.flow_from_directory(
+        dir_train,
+        target_size=(180, 180),
+        batch_size=batch_size,
+        subset="validation",
+        class_mode='categorical'
+    )
+    test = test_datagen.flow_from_directory(
+        dir_test,
+        target_size=(180, 180),
+        batch_size=batch_size,
+        class_mode='categorical'
+    )
+
+    return train, val, test
+
+
+def train(batch_size: int = 32, epochs: int = 60) -> Tuple[Sequential, DirectoryIterator]:
+    train_data, val_data, test_data = train_dataset(batch_size=batch_size)
     
-    # Train the model
-    history = model.fit(...)
+    model = CNN()
+    # Зменшуємо learning_rate з 0.001 до 0.0003 для стабільного виходу з плато
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=3e-4),
+        loss='categorical_crossentropy',
+        metrics=['accuracy']
+    )
+
+    model.summary()
+
+    # Зберігаємо найкращу модель за val_accuracy та плавно зменшуємо lr на плато
+    checkpoint = tf.keras.callbacks.ModelCheckpoint(
+        "best_pet_cnn.keras",
+        monitor="val_accuracy",
+        save_best_only=True,
+        mode="max"
+    )
+    reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+        monitor="val_loss",
+        factor=0.5,
+        patience=5,
+        min_lr=1e-6
+    )
     
-    # Evaluate on test set
-    test_loss, test_acc = model.evaluate(...)
+    history = model.fit(
+        train_data,
+        validation_data=val_data,
+        epochs=epochs,
+        callbacks=[IntervalLogger(), checkpoint, reduce_lr],
+        verbose=0
+    )
+
+    # Завантажуємо найкращі ваги перед фінальною оцінкою
+    model = tf.keras.models.load_model("best_pet_cnn.keras")
+    
+    test_loss, test_acc = model.evaluate(test_data)
     print(f"Test accuracy: {test_acc:.4f}")
     
-    # Return the model and test data
     return model, test_data
 
 
@@ -172,11 +219,9 @@ def visualize_augmented_images(train_data: DirectoryIterator) -> None:
     Args:
         train_data: Training data generator
     """
-    # Get a batch of augmented images
     images, labels = next(train_data)
     class_names = {0: 'Cat', 1: 'Dog'}
     
-    # Plot the images
     plt.figure(figsize=(10, 10))
     for i in range(16):
         plt.subplot(4, 4, i + 1)
@@ -196,25 +241,27 @@ def visualize_predictions(model: Sequential, test_data: DirectoryIterator) -> No
         model: Trained CNN model
         test_data: Test data generator
     """
-    # Get predictions for the test set
     images, true_labels = next(test_data)
     predictions = model.predict(images)
     class_names = {0: 'Cat', 1: 'Dog'}
-    
-    # Plot the predictions
-    plt.figure(figsize=(15, 15))
+   
+    plt.figure(figsize=(14, 16))
     for i in range(16):
         plt.subplot(4, 4, i + 1)
         plt.xticks([])
         plt.yticks([])
         plt.grid(False)
         plt.imshow(images[i])
+        
         predicted_class = class_names[np.argmax(predictions[i])]
         true_class = class_names[np.argmax(true_labels[i])]
-        plt.xlabel(f"Pred: {predicted_class}\nTrue: {true_class}")
-    plt.tight_layout()
-    plt.show()
 
+        color = "green" if predicted_class == true_class else "red"
+        plt.xlabel(f"Pred: {predicted_class}\nTrue: {true_class}", color=color, fontsize=11)
+        
+    plt.tight_layout()
+    plt.subplots_adjust(hspace=0.4)
+    plt.show()
 
 if __name__ == '__main__':
     # Load data with augmentation
